@@ -6,10 +6,9 @@ import random
 import warnings
 
 from sklearn import metrics
+from itertools import product
 
 import numpy as np
-
-from utils import read_ground_truth, read_submission, binary_confusion_matrix
 
 random.seed(0)
 np.random.seed(0)
@@ -21,21 +20,21 @@ GROUND_TRUTH_PATH = '/Users/steven/github/biomedia-2019-submission-evaluation/gr
 
 RESULTS_DIRECTORY = '/Users/steven/github/biomedia-2019-submission-evaluation/results'
 
-METRICS_SHORT = [
-    'TP', 'TN', 'FP', 'FN' ,'TPR', 'TNR', 'PPV', 'NPV', 'FNR', 'FPR',
-    'FDR', 'FOR', 'ACC', 'F1', 'MCC', 'BM', 'MK', 'RK', 'FPS_AVG', 'FPS_MIN'
-]
-
 AVERAGING_TECHNIQUES = ['macro', 'micro']
 
-METRICS_LONG = [
-    'True Positive / Hit / TP', 'True Negative / Correct Rejection / TN', 'False Positive / False Alarm / FP', 'False negative / Miss / FN',
-    'Recall / Sensitivity / Hit rate / True Positive Rate / TPR', 'Specificity / True Negative Rate / TNR', 'Precision / Positive Predictive value / PPV',
-    'Negative Predictive Value / NPV', 'Miss Rate / False Negative Rate / FNR', 'Fall-f / False Positive Rate / FPR', 'False Discovery Rate / FDR',
-    'False Omission Rate / FOR', 'Accuracy / ACC', 'F1', 'MCC', 'Informedness / Bookmaker Informedness / BM', 'Markedness / MK',
-    'Rk statistic / MCC for k different classes / RK', 'Average Processing Speed / Average Frames per Second / FPS Avg.',
-    'Minimum Processing Speed / Minimum Frames per Second / FPS Min.'
-]
+def binary_confusion_matrix(y_true, y_pred, y_target):
+
+    targ_tmp = np.where(y_true != y_target, 0, 1)
+    pred_tmp = np.where(y_pred != y_target, 0, 1)
+
+    class_labels = np.unique(np.concatenate((targ_tmp, pred_tmp)))
+
+    z = list(zip(targ_tmp, pred_tmp))
+    lst = [ z.count(combi) for combi in product(class_labels, repeat=2) ]
+
+    mat = np.asarray(lst)[:, None].reshape(2, 2)
+
+    return np.array(mat, dtype=np.float32)
 
 def save_confusion_matrix(path, confusion_matrix, labels=None):
     
@@ -49,6 +48,39 @@ def save_confusion_matrix(path, confusion_matrix, labels=None):
     with open(path, 'w') as f:
         writer = csv.writer(f, lineterminator='\n')
         writer.writerows(confusion_list)
+
+def read_submission(submission_path):
+    results = {}
+    lines = []
+    with open(submission_path) as f:
+        for row in csv.reader(f):
+            lines.append(row)
+            image_id = os.path.splitext(row[0].strip())[0].strip()
+            results[image_id] = row[1].strip()
+    return np.array(lines), results
+
+def read_gt(gt_path):
+
+    gt_classes = {}
+    gt_results = {}
+    gt_classes_list = []
+
+    with open(gt_path) as csv_data:
+        class_id = 0
+        for row in csv.reader(csv_data):
+            image_id = os.path.splitext(row[0].strip())[0].strip()
+            if image_id in gt_results:
+                print(f'Duplicate in GT: { image_id }')
+                
+            class_name = row[1].strip()
+            gt_results[image_id] = class_name
+            
+            if not class_name in gt_classes_list:
+                gt_classes_list.append(class_name)
+                gt_classes[class_name] = class_id
+                class_id += 1
+                
+    return gt_classes, gt_results
 
 def evaluate_submission(submission_path):
 
@@ -75,7 +107,7 @@ def evaluate_submission(submission_path):
         minimum_time = np.min(submission_times)
         maximum_time = np.max(submission_times)
 
-    gt_classes, gt_results = read_ground_truth(GROUND_TRUTH_PATH)
+    gt_classes, gt_results = read_gt(GROUND_TRUTH_PATH)
     number_of_classes = len(gt_classes.items())
 
     y_pred, y_truth = [], []
@@ -116,6 +148,7 @@ def evaluate_submission(submission_path):
     PREC = metrics.precision_score(y_truth, y_pred, average=None)
     REC  = metrics.recall_score(y_truth, y_pred, average=None)
     F1   = metrics.f1_score(y_truth, y_pred, average=None)
+    SPEC = TN / (TN + FP)
 
     class_specific_metrics_path   = os.path.join(team_result_path, 'class_specific_metrics')
     class_specific_confusion_path = os.path.join(team_result_path, 'class_specific_confusion_matricies')
@@ -132,13 +165,20 @@ def evaluate_submission(submission_path):
             binary_confusion_matrix(y_truth, y_pred, class_id), labels=[f'non-{ class_name }', class_name])
 
         with open(os.path.join(class_specific_metrics_path, f'{ class_name }_metrics.csv'), 'w') as f:
+            f.write(f'metric,value\n')
             f.write(f'true-positives,{ int(TP[class_id]) }\n')
             f.write(f'true-negatives,{ int(TN[class_id]) }\n')
             f.write(f'false-positives,{ int(FP[class_id]) }\n')
             f.write(f'false-negatives,{ int(FN[class_id]) }\n')
             f.write(f'precision,{ PREC[class_id] }\n')
-            f.write(f'recall,{ REC[class_id] }\n')
+            f.write(f'recall/sensitivity,{ REC[class_id] }\n')
+            f.write(f'specificity,{ SPEC[class_id] }\n')
             f.write(f'f1,{ F1[class_id] }\n')
+
+    SPEC = {
+        'macro': np.mean(TN / (TN + FP)),
+        'micro': np.mean(sum(TN) / (sum(TN) + sum(FP)))
+    }
 
     for average_technique in AVERAGING_TECHNIQUES:
 
@@ -149,12 +189,14 @@ def evaluate_submission(submission_path):
         MCC  = metrics.matthews_corrcoef(y_truth, y_pred)
         
         with open(os.path.join(team_result_path, f'{ average_technique }_average_metrics.csv'), 'w') as f:
+            f.write(f'metric,value\n')
             f.write(f'true-positives,{ int(sum(TP)) }\n')
             f.write(f'true-negatives,{ int(sum(TN)) }\n')
             f.write(f'false-positives,{ int(sum(FP)) }\n')
             f.write(f'false-negatives,{ int(sum(FN)) }\n')
             f.write(f'precision,{ PREC }\n')
-            f.write(f'recall,{ REC }\n')
+            f.write(f'recall/sensitivity,{ REC }\n')
+            f.write(f'specificity,{ SPEC[average_technique] }\n')
             f.write(f'f1,{ F1 }\n')
             f.write(f'mcc,{ MCC }\n')
 

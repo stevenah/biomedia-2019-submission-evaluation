@@ -7,6 +7,7 @@ import warnings
 
 from sklearn import metrics
 from itertools import product
+from shutil import copyfile
 
 import numpy as np
 
@@ -15,10 +16,10 @@ np.random.seed(0)
 
 warnings.filterwarnings('ignore')
 
-SUBMISSIONS_DIRECTORY_PATH = '/Users/steven/github/biomedia-2019-submission-evaluation/submissions'
-GROUND_TRUTH_PATH = '/Users/steven/github/biomedia-2019-submission-evaluation/ground_truth.csv'
+SUBMISSIONS_DIRECTORY_PATH = ''
+GROUND_TRUTH_PATH = ''
 
-RESULTS_DIRECTORY = '/Users/steven/github/biomedia-2019-submission-evaluation/results'
+RESULTS_DIRECTORY = ''
 
 AVERAGING_TECHNIQUES = ['macro', 'micro']
 
@@ -91,6 +92,7 @@ def evaluate_submission(submission_path):
 
     submission_attributes = os.path.basename(submission_filename).split('_')
     
+    
     # Extract run attributes
     team_name = submission_attributes[1]
     task_name = submission_attributes[2]
@@ -98,12 +100,11 @@ def evaluate_submission(submission_path):
 
     team_result_path = os.path.join(RESULTS_DIRECTORY, team_name, task_name, run_id)
 
-    average_time = None
-    minimum_time = None
-    maximum_time = None
-
     if not os.path.exists(team_result_path):
         os.makedirs(team_result_path)
+
+    # Copy submission file into results file for easy access
+    copyfile(submission_path, f'{ team_result_path }/{ os.path.basename(submission_path) }')
     
     # Read submission file
     duplicates, submission_lines, prediction_results = read_submission(submission_path)
@@ -112,12 +113,22 @@ def evaluate_submission(submission_path):
     print(f'The number of unique predicted images is: { len(np.unique(submission_lines[:, 0])) }')
     print(f'The number of duplicates is : { len(duplicates) }')
 
+    average_time = None
+    minimum_time = None
+    maximum_time = None
+
     # Check if prediction line contains time information
     if len(submission_lines[0]) > 3:
         submission_times = np.array(submission_lines[:, 3], dtype=np.float32)
-        average_time = np.mean(submission_times)
-        minimum_time = np.min(submission_times)
-        maximum_time = np.max(submission_times)
+
+        # Calculate time information
+        average_time = np.mean(submission_times) * 1000
+        minimum_time = np.min(submission_times)  * 1000
+        maximum_time = np.max(submission_times)  * 1000
+
+        average_FPS = 1.0 / (np.mean(submission_times))
+        maximum_FPS = 1.0 / (np.min(submission_times))
+        minimum_FPS = 1.0 / (np.max(submission_times))
 
     # Read the ground truth and extract classes
     gt_classes, gt_results = read_gt(GROUND_TRUTH_PATH)
@@ -237,6 +248,9 @@ def evaluate_submission(submission_path):
                 f.write(f'average-time,{ average_time }\n')
                 f.write(f'minimum-time,{ minimum_time }\n')
                 f.write(f'maximum-time,{ maximum_time }\n')
+                f.write(f'average-FPS,{ average_FPS }\n')
+                f.write(f'minimum-FPS,{ minimum_FPS }\n')
+                f.write(f'maximum-FPS,{ maximum_FPS }\n')
         
         # Save results to common results
         with open(os.path.join(RESULTS_DIRECTORY, f'all_{ average_technique }_average_metrics.csv'), 'a') as f:
@@ -244,14 +258,14 @@ def evaluate_submission(submission_path):
             f.write(f',{ int(sum(TP)) },{ int(sum(TN)) },{ int(sum(FP)) },{ int(sum(FN)) }')
             f.write(f',{ PREC },{ REC },{ SPEC[average_technique] },{ F1 },{ MCC }')
             if average_time is not None:
-                f.write(f',{ average_time },{ minimum_time },{ maximum_time }')
+                f.write(f',{ average_time },{ minimum_time },{ maximum_time },{ average_FPS },{ minimum_FPS },{ maximum_FPS }')
             f.write(f'\n')
         
 if __name__ == '__main__':
 
     for average_technique in AVERAGING_TECHNIQUES:
         with open(os.path.join(RESULTS_DIRECTORY, f'all_{ average_technique }_average_metrics.csv'), 'w') as f:
-            f.write('team-name,task-name,run-id,true-positives,true-negatives,false-positives,false-negatives,precision,recall/sensitivity,specificity,f1,mcc,average-time,minimum-time,maximum-time\n')
+            f.write('team-name,task-name,run-id,true-positives,true-negatives,false-positives,false-negatives,precision,recall/sensitivity,specificity,f1,mcc,average-time,minimum-time,maximum-time,average-FPS,minimum-FPS,maximum-FPS\n')
 
     for submission_filename in os.listdir(SUBMISSIONS_DIRECTORY_PATH):
 
